@@ -1,0 +1,119 @@
+<!-- Chat interface where users ask Claude questions about their codebase. -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>devlens</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>devlens</h1>
+    <span class="subtitle">ask claude about your codebase</span>
+    <span class="stats" id="stats"></span>
+  </header>
+
+  <main id="conversation"></main>
+
+  <form id="composer">
+    <textarea id="input" placeholder="Ask about this project... (⌘+Enter to send)" rows="3"></textarea>
+    <button type="submit" id="send">Send</button>
+  </form>
+
+  <script>
+    const conversation = document.getElementById("conversation");
+    const form = document.getElementById("composer");
+    const input = document.getElementById("input");
+    const sendBtn = document.getElementById("send");
+    const stats = document.getElementById("stats");
+
+    // History is the messages array from api.js. The server gives it back
+    // on every response; we hand it back on every request. That's the whole
+    // state of the conversation — Claude has no memory besides this.
+    let history = [];
+    let totalIterations = 0;
+
+    function esc(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    function render(item) {
+      const el = document.createElement("div");
+      el.className = `msg msg-${item.type}`;
+
+      if (item.type === "user") {
+        el.innerHTML = `<div class="role">you</div><div class="content">${esc(item.text)}</div>`;
+      } else if (item.type === "text") {
+        el.innerHTML = `<div class="role">claude</div><div class="content">${esc(item.text)}</div>`;
+      } else if (item.type === "tool_use") {
+        el.innerHTML = `
+          <div class="role">tool call</div>
+          <div class="content">
+            <span class="tool-name">${esc(item.name)}</span>
+            <pre>${esc(JSON.stringify(item.input, null, 2))}</pre>
+          </div>`;
+      } else if (item.type === "tool_result") {
+        el.innerHTML = `
+          <div class="role">tool result · ${esc(item.name)}</div>
+          <div class="content"><pre>${esc(item.content)}</pre></div>`;
+      }
+
+      conversation.appendChild(el);
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const message = input.value.trim();
+      if (!message) return;
+
+      render({ type: "user", text: message });
+      input.value = "";
+      sendBtn.disabled = true;
+
+      const thinking = document.createElement("div");
+      thinking.className = "msg msg-thinking";
+      thinking.innerHTML = `<div class="role">claude</div><div class="content">thinking…</div>`;
+      conversation.appendChild(thinking);
+      window.scrollTo(0, document.body.scrollHeight);
+
+      try {
+        const res = await fetch("/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message, history }),
+        });
+        const data = await res.json();
+        thinking.remove();
+
+        if (data.error) {
+          render({ type: "text", text: `Error: ${data.error}` });
+        } else {
+          data.trace.forEach(render);
+          history = data.history;
+          totalIterations += data.iterations;
+          stats.textContent = `${data.iterations} iteration${data.iterations === 1 ? "" : "s"} this turn · ${totalIterations} total`;
+        }
+      } catch (err) {
+        thinking.remove();
+        render({ type: "text", text: `Error: ${err.message}` });
+      } finally {
+        sendBtn.disabled = false;
+        input.focus();
+      }
+    });
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        form.requestSubmit();
+      }
+    });
+
+    input.focus();
+  </script>
+</body>
+</html>
